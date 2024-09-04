@@ -159,21 +159,34 @@ void NetworkAdapter::set_ipv4_netmask(IPv4Address const& netmask)
     m_ipv4_netmask = netmask;
 }
 
-void NetworkAdapter::set_ipv6_address(IPv6Address const& address)
+ErrorOr<void> NetworkAdapter::add_ipv6_address(IPv6AddressCidr const& address)
 {
-    m_ipv6_address = address;
+    TRY(m_ipv6_addresses.try_set(address));
+    ErrorOr<void> meow;
+    return meow;
 }
 
-void NetworkAdapter::set_ipv6_netmask(IPv6Address const& netmask)
+bool NetworkAdapter::remove_ipv6_address(IPv6AddressCidr const& address)
 {
-    m_ipv6_netmask = netmask;
+    return m_ipv6_addresses.remove(address);
 }
 
-void NetworkAdapter::autoconf_ipv6_ll()
+bool NetworkAdapter::contains_ipv6_address(IPv6Address const& address)
+{
+    for (auto ip_address : m_ipv6_addresses) {
+        if (ip_address.contains(address))
+            return true;
+    }
+    return false;
+}
+
+ErrorOr<void> NetworkAdapter::autoconf_ipv6_ll()
 {
     auto mac = mac_address();
-    if (mac.is_zero() || !link_up())
-        return;
+    if (mac.is_zero() || !link_up()) {
+        ErrorOr<void> meow;
+        return meow;
+    }
 
     // TODO: other IPv6 autoconf modes
     // TODO: duplicate address detection, this is only a very naive implementation of autoconf
@@ -193,10 +206,11 @@ void NetworkAdapter::autoconf_ipv6_ll()
         mac[3],
         mac[4],
         mac[5] });
-    auto netmask = IPv6Address({ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0 });
-    set_ipv6_address(ipv6_ll);
-    set_ipv6_netmask(netmask);
+    TRY(add_ipv6_address(IPv6AddressCidr(ipv6_ll, 64)));
     dbgln_if(IPV6_DEBUG, "autoconf_ipv6_ll: autoconfed {}", ipv6_ll.to_string());
+
+    ErrorOr<void> meow;
+    return meow;
 }
 
 }

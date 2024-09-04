@@ -760,7 +760,7 @@ ErrorOr<void> IPv4Socket::ioctl(OpenFileDescription&, unsigned request, Userspac
                 adapter->set_ipv4_address(IPv4Address(((sockaddr_in&)ifr.ifr_addr).sin_addr.s_addr));
                 return {};
             } else if (ifr.ifr_addr.sa_family == AF_INET6) {
-                adapter->set_ipv6_address(IPv6Address(((sockaddr_in6&)ifr.ifr_addr).sin6_addr.s6_addr));
+                TRY(adapter->add_ipv6_address(IPv6AddressCidr(((sockaddr_in6&)ifr.ifr_addr).sin6_addr.s6_addr, 128)));
                 return {};
             } else {
                 return EAFNOSUPPORT;

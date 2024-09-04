@@ -360,11 +360,11 @@ UNMAP_AFTER_INIT ErrorOr<void> RTL8168NetworkAdapter::initialize(Badge<Networkin
         TODO();
     }
 
-    startup();
+    TRY(startup());
     return {};
 }
 
-void RTL8168NetworkAdapter::startup()
+ErrorOr<void> RTL8168NetworkAdapter::startup()
 {
     // initialize descriptors
     initialize_rx_descriptors();
@@ -437,7 +437,10 @@ void RTL8168NetworkAdapter::startup()
 
     // update link status
     m_link_up = (in8(REG_PHYSTATUS) & PHY_LINK_STATUS) != 0;
-    autoconf_ipv6_ll();
+    TRY(autoconf_ipv6_ll());
+
+    ErrorOr<void> meow;
+    return meow;
 }
 
 void RTL8168NetworkAdapter::configure_phy()
@@ -1323,7 +1326,9 @@ bool RTL8168NetworkAdapter::handle_irq(RegisterState const&)
         if (status & INT_LINK_CHANGE) {
             m_link_up = (in8(REG_PHYSTATUS) & PHY_LINK_STATUS) != 0;
             dmesgln_pci(*this, "Link status changed up={}", m_link_up);
-            autoconf_ipv6_ll();
+            // TODO: proper error handling
+            if (autoconf_ipv6_ll().is_error())
+                return false;
         }
         if (status & INT_RX_FIFO_OVERFLOW) {
             dmesgln_pci(*this, "RX FIFO overflow");

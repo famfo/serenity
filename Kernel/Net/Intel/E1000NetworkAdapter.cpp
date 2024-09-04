@@ -207,7 +207,7 @@ UNMAP_AFTER_INIT ErrorOr<void> E1000NetworkAdapter::initialize(Badge<NetworkingM
     setup_interrupts();
 
     m_link_up = ((in32(REG_STATUS) & STATUS_LU) != 0);
-    autoconf_ipv6_ll();
+    TRY(autoconf_ipv6_ll());
 
     return {};
 }
@@ -258,7 +258,10 @@ bool E1000NetworkAdapter::handle_irq(RegisterState const&)
         out32(REG_CTRL, flags | ECTRL_SLU);
 
         m_link_up = ((in32(REG_STATUS) & STATUS_LU) != 0);
-        autoconf_ipv6_ll();
+        // TODO: this is not proper error handling
+        if (autoconf_ipv6_ll().is_error()) {
+            return false;
+        }
     }
     if (status & INTERRUPT_RXDMT0) {
         // Threshold OK?

@@ -231,7 +231,7 @@ UNMAP_AFTER_INIT ErrorOr<void> E1000ENetworkAdapter::initialize(Badge<Networking
 
     setup_link();
     setup_interrupts();
-    autoconf_ipv6_ll();
+    TRY(autoconf_ipv6_ll());
     return {};
 }
 

@@ -78,7 +78,7 @@ RefPtr<NetworkAdapter> NetworkingManagement::from_ipv6_address(IPv6Address const
         return m_loopback_adapter;
     return m_adapters.with([&](auto& adapters) -> RefPtr<NetworkAdapter> {
         for (auto& adapter : adapters) {
-            if (adapter->ipv6_address() == address || adapter->ipv6_multicast() == address)
+            if (adapter->contains_ipv6_address(address) || address.is_multicast())
                 return adapter;
         }
         return nullptr;

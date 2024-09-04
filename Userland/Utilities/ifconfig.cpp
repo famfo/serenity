@@ -46,8 +46,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
             auto mac_address = if_object.get_byte_string("mac_address"sv).value_or({});
             auto ipv4_address = if_object.get_byte_string("ipv4_address"sv).value_or({});
             auto ipv4_netmask = if_object.get_byte_string("ipv4_netmask"sv).value_or({});
-            auto ipv6_address = if_object.get_byte_string("ipv6_address"sv).value_or({});
-            auto ipv6_netmask = if_object.get_byte_string("ipv6_netmask"sv).value_or({});
+            auto ipv6_addresses = if_object.get_array("ipv6_addresses"sv).value_or({});
             auto packets_in = if_object.get_u32("packets_in"sv).value_or(0);
             auto bytes_in = if_object.get_u32("bytes_in"sv).value_or(0);
             auto packets_out = if_object.get_u32("packets_out"sv).value_or(0);
@@ -60,11 +59,9 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
                 outln("\tipv4: {}", ipv4_address);
                 outln("\tnetmask: {}", ipv4_netmask);
             }
-            if (!ipv6_address.is_empty()) {
-                outln("\tipv6: {}", ipv6_address);
-                // TODO: this should probably displayed as a CIDR instead for better readability
-                outln("\tnetmask: {}", ipv6_netmask);
-            }
+            ipv6_addresses.for_each([](auto& ipv6_address) {
+                outln("\tipv6: {}", ipv6_address.as_string());
+            });
             outln("\tclass: {}", class_name);
             outln("\tRX: {} packets {} bytes ({})", packets_in, bytes_in, human_readable_size(bytes_in));
             outln("\tTX: {} packets {} bytes ({})", packets_out, bytes_out, human_readable_size(bytes_out));
