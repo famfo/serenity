@@ -63,14 +63,11 @@ public:
 
     StringView name() const { return m_name.representable_view(); }
     MACAddress mac_address() { return m_mac_address; }
-    IPv4Address ipv4_address() const { return m_ipv4_address; }
-    IPv4Address ipv4_netmask() const { return m_ipv4_netmask; }
-    IPv4Address ipv4_broadcast() const { return IPv4Address { (m_ipv4_address.to_u32() & m_ipv4_netmask.to_u32()) | ~m_ipv4_netmask.to_u32() }; }
-
-    IPv6Address ipv6_address() const { return m_ipv6_address; }
-    IPv6Address ipv6_netmask() const { return m_ipv6_netmask; }
+    HashMap<IPv4Address, u8> ipv4_addresses() const { return m_ipv4_addresses; }
+    HashMap<IPv6Address, u8> ipv6_addresses() const { return m_ipv6_addresses; }
     // TODO: implement other multicast addresses
-    IPv6Address ipv6_multicast() const { return IPv6Address({ 0xff, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }); }
+    // is the IPv6Address class maybe a better place for this?
+    IPv6Address ipv6_multicast_all_nodes() const { return IPv6Address({ 0xff, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }); }
 
     virtual bool link_up() { return false; }
     virtual i32 link_speed()
@@ -80,11 +77,8 @@ public:
     }
     virtual bool link_full_duplex() { return false; }
 
-    void set_ipv4_address(IPv4Address const&);
-    void set_ipv4_netmask(IPv4Address const&);
-
-    void set_ipv6_address(IPv6Address const&);
-    void set_ipv6_netmask(IPv6Address const&);
+    void add_ipv4_address(IPv4Address const&, u8 length);
+    void add_ipv6_address(IPv6Address const&, u8 length);
 
     void send(MACAddress const&, ARPPacket const&);
     void fill_in_ipv4_header(PacketWithTimestamp&, IPv4Address const&, MACAddress const&, IPv4Address const&, IPv4Protocol, size_t, u8 type_of_service, u8 ttl);
@@ -121,11 +115,9 @@ protected:
 
 private:
     MACAddress m_mac_address;
-    // FIXME: Allow for more than one IPv4/IPv6 address each.
-    IPv4Address m_ipv4_address;
-    IPv4Address m_ipv4_netmask;
-    IPv6Address m_ipv6_address;
-    IPv6Address m_ipv6_netmask;
+
+    HashMap<IPv4Address, u8> m_ipv4_addresses;
+    HashMap<IPv6Address, u8> m_ipv6_addresses;
 
     // FIXME: Make this configurable
     static constexpr size_t max_packet_buffers = 1024;

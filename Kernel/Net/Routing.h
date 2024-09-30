@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/IPv4Address.h>
+#include <AK/IpAddressCidr.h>
 #include <AK/RefPtr.h>
 #include <Kernel/Locking/MutexProtected.h>
 #include <Kernel/Net/NetworkAdapter.h>
@@ -15,10 +16,9 @@
 namespace Kernel {
 
 struct Route final : public AtomicRefCounted<Route> {
-    Route(IPv4Address const& destination, IPv4Address const& gateway, IPv4Address const& netmask, u16 flags, NonnullRefPtr<NetworkAdapter> adapter)
+    Route(IPv4AddressCidr const& destination, IPv4Address const& gateway, u16 flags, NonnullRefPtr<NetworkAdapter> adapter)
         : destination(destination)
         , gateway(gateway)
-        , netmask(netmask)
         , flags(flags)
         , adapter(adapter)
     {
@@ -26,17 +26,16 @@ struct Route final : public AtomicRefCounted<Route> {
 
     bool operator==(Route const& other) const
     {
-        return destination == other.destination && netmask == other.netmask && flags == other.flags && adapter.ptr() == other.adapter.ptr();
+        return destination == other.destination && flags == other.flags && adapter.ptr() == other.adapter.ptr();
     }
 
     bool matches(Route const& other) const
     {
-        return destination == other.destination && (gateway == other.gateway || other.gateway.is_zero()) && netmask == other.netmask && flags == other.flags && adapter.ptr() == other.adapter.ptr();
+        return destination == other.destination && (gateway == other.gateway || other.gateway.is_zero()) && flags == other.flags && adapter.ptr() == other.adapter.ptr();
     }
 
-    IPv4Address const destination;
+    IPv4AddressCidr const destination;
     IPv4Address const gateway;
-    IPv4Address const netmask;
     u16 const flags;
     NonnullRefPtr<NetworkAdapter> const adapter;
 
@@ -44,9 +43,11 @@ struct Route final : public AtomicRefCounted<Route> {
     using RouteList = IntrusiveList<&Route::route_list_node>;
 };
 
+// FIXME: this is very much IPv4 only
 struct RoutingDecision {
     RefPtr<NetworkAdapter> adapter;
     MACAddress next_hop;
+    IPv4Address source_address;
 
     bool is_zero() const;
 };
@@ -57,7 +58,7 @@ enum class UpdateTable {
 };
 
 void update_arp_table(IPv4Address const&, MACAddress const&, UpdateTable update);
-ErrorOr<void> update_routing_table(IPv4Address const& destination, IPv4Address const& gateway, IPv4Address const& netmask, u16 flags, RefPtr<NetworkAdapter> const adapter, UpdateTable update);
+ErrorOr<void> update_routing_table(IPv4AddressCidr const& destination, IPv4Address const& gateway, u16 flags, RefPtr<NetworkAdapter> const adapter, UpdateTable update);
 
 enum class AllowUsingGateway {
     Yes,

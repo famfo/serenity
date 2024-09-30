@@ -149,24 +149,14 @@ void NetworkAdapter::release_packet_buffer(PacketWithTimestamp& packet)
     });
 }
 
-void NetworkAdapter::set_ipv4_address(IPv4Address const& address)
+void NetworkAdapter::add_ipv4_address(IPv4Address const& address, u8 length)
 {
-    m_ipv4_address = address;
+    m_ipv4_addresses.set(address, length);
 }
 
-void NetworkAdapter::set_ipv4_netmask(IPv4Address const& netmask)
+void NetworkAdapter::add_ipv6_address(IPv6Address const& address, u8 length)
 {
-    m_ipv4_netmask = netmask;
-}
-
-void NetworkAdapter::set_ipv6_address(IPv6Address const& address)
-{
-    m_ipv6_address = address;
-}
-
-void NetworkAdapter::set_ipv6_netmask(IPv6Address const& netmask)
-{
-    m_ipv6_netmask = netmask;
+    m_ipv6_addresses.set(address, length);
 }
 
 void NetworkAdapter::autoconfigure_link_local_ipv6()
@@ -193,10 +183,9 @@ void NetworkAdapter::autoconfigure_link_local_ipv6()
         mac[3],
         mac[4],
         mac[5] });
-    auto netmask = IPv6Address({ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0 });
-    set_ipv6_address(ipv6_ll);
-    set_ipv6_netmask(netmask);
-    dbgln("autoconfigured link-local address {}", ipv6_ll.to_string());
+
+    add_ipv6_address(ipv6_ll, 64);
+    dbgln("autoconfigured link-local address {}/64", ipv6_ll.to_string());
 }
 
 }

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include "AK/IpAddressCidr.h"
 #include <AK/HashMap.h>
 #include <AK/Singleton.h>
 #include <Kernel/Debug.h>
@@ -135,11 +136,11 @@ SpinlockProtected<Route::RouteList, LockRank::None>& routing_table()
     return *s_routing_table;
 }
 
-ErrorOr<void> update_routing_table(IPv4Address const& destination, IPv4Address const& gateway, IPv4Address const& netmask, u16 flags, RefPtr<NetworkAdapter> adapter, UpdateTable update)
+ErrorOr<void> update_routing_table(IPv4AddressCidr const& destination, IPv4Address const& gateway, u16 flags, RefPtr<NetworkAdapter> adapter, UpdateTable update)
 {
-    dbgln_if(ROUTING_DEBUG, "update_routing_table {} {} {} {} {} {}", destination, gateway, netmask, flags, adapter, update == UpdateTable::Set ? "Set" : "Delete");
+    dbgln_if(ROUTING_DEBUG, "update_routing_table {} {} {} {} {}", destination, gateway, flags, adapter, update == UpdateTable::Set ? "Set" : "Delete");
 
-    auto route_entry = adopt_ref_if_nonnull(new (nothrow) Route { destination, gateway, netmask, flags, adapter.release_nonnull() });
+    auto route_entry = adopt_ref_if_nonnull(new (nothrow) Route { destination, gateway, flags, adapter.release_nonnull() });
     if (!route_entry)
         return ENOMEM;
 
@@ -153,7 +154,7 @@ ErrorOr<void> update_routing_table(IPv4Address const& destination, IPv4Address c
         }
         if (update == UpdateTable::Delete) {
             for (auto& route : table) {
-                dbgln_if(ROUTING_DEBUG, "candidate: {} {} {} {} {}", route.destination, route.gateway, route.netmask, route.flags, route.adapter);
+                dbgln_if(ROUTING_DEBUG, "candidate: {} {} {} {}", route.destination, route.gateway, route.flags, route.adapter);
                 if (route.matches(*route_entry)) {
                     // FIXME: Remove all entries, not only the first one.
                     table.remove(route);
@@ -186,130 +187,146 @@ RoutingDecision route_to(IPv4Address const& target, IPv4Address const& source, R
 
         return through == adapter;
     };
-    auto if_matches = [&](auto& adapter, auto const& mac) -> RoutingDecision {
+    auto if_matches = [&](auto& adapter, auto const& mac, auto source_address) -> RoutingDecision {
         if (!matches(adapter))
-            return { nullptr, {} };
-        return { adapter, mac };
+            return { nullptr, {}, {} };
+        return { adapter, mac, source_address };
     };
 
-    if (target[0] == 0 && target[1] == 0 && target[2] == 0 && target[3] == 0)
-        return if_matches(*NetworkingManagement::the().loopback_adapter(), NetworkingManagement::the().loopback_adapter()->mac_address());
-    if (target[0] == 127)
-        return if_matches(*NetworkingManagement::the().loopback_adapter(), NetworkingManagement::the().loopback_adapter()->mac_address());
-
-    auto target_addr = target.to_u32();
-    auto source_addr = source.to_u32();
+    // FIXME: the localhost origin address is not always 127.0.0.1
+    if (target.to_u32() == 0 || target[0] == 127)
+        return if_matches(*NetworkingManagement::the().loopback_adapter(), NetworkingManagement::the().loopback_adapter()->mac_address(), IPv4Address(127, 0, 0, 1));
 
     RefPtr<NetworkAdapter> local_adapter = nullptr;
     RefPtr<Route> chosen_route = nullptr;
 
-    NetworkingManagement::the().for_each([source_addr, &target_addr, &local_adapter, &matches, &through](NetworkAdapter& adapter) {
-        auto adapter_addr = adapter.ipv4_address().to_u32();
-        auto adapter_mask = adapter.ipv4_netmask().to_u32();
+    NetworkingManagement::the().for_each([source, &target, &local_adapter, &matches, &through](NetworkAdapter& adapter) {
+        auto local_addresses = adapter.ipv4_addresses();
+        for (auto entry : local_addresses) {
+            auto address = IPv4AddressCidr(entry.key, entry.value);
+            dbgln("route_to: trying {} {} for target {}", local_adapter->name(), address, target);
 
-        if (target_addr == adapter_addr) {
-            local_adapter = NetworkingManagement::the().loopback_adapter();
-            return;
+            if (source == address.ip_address()) {
+                local_adapter = NetworkingManagement::the().loopback_adapter();
+                return;
+            }
+
+            if (!adapter.link_up() || (address.ip_address().to_u32() == 0 && !through))
+                return;
+
+            if (source.to_u32() != 0 && source != address.ip_address())
+                continue;
+
+            if (address.contains(target) && matches(adapter)) {
+                local_adapter = adapter;
+                return;
+            }
         }
-
-        if (!adapter.link_up() || (adapter_addr == 0 && !through))
-            return;
-
-        if (source_addr != 0 && source_addr != adapter_addr)
-            return;
-
-        if ((target_addr & adapter_mask) == (adapter_addr & adapter_mask) && matches(adapter))
-            local_adapter = adapter;
     });
 
     u32 longest_prefix_match = 0;
-    routing_table().for_each([&target_addr, &matches, &longest_prefix_match, &chosen_route](auto& route) {
-        auto route_addr = route.destination.to_u32();
-        auto route_mask = route.netmask.to_u32();
-
-        if (route_addr == 0 && matches(*route.adapter)) {
+    routing_table().for_each([&target, &matches, &longest_prefix_match, &chosen_route](auto& route) {
+        if (route.destination.ip_address().to_u32() == 0 && matches(*route.adapter)) {
             dbgln_if(ROUTING_DEBUG, "Resorting to default route found for adapter: {}", route.adapter->name());
             chosen_route = route;
         }
 
         // We have a direct match and we can exit the routing table earlier.
-        if (target_addr == route_addr) {
+        if (target == route.destination.ip_address()) {
             dbgln_if(ROUTING_DEBUG, "Target address has a direct match in the routing table");
             chosen_route = route;
             return;
         }
 
-        if ((target_addr & route_mask) == (route_addr & route_mask) && (route_addr != 0)) {
-            auto prefix = (target_addr & (route_addr & route_mask));
+        if (route.destination.contains(target) && (route.destination.ip_address().to_u32() != 0)) {
+            auto prefix = route.destination.length();
 
             if (chosen_route && prefix == longest_prefix_match) {
-                chosen_route = (route.netmask.to_u32() > chosen_route->netmask.to_u32()) ? route : chosen_route;
-                dbgln_if(ROUTING_DEBUG, "Found a matching prefix match. Using longer netmask: {}", chosen_route->netmask);
+                chosen_route = (route.destination.length() > chosen_route->destination.length()) ? route : chosen_route;
+                dbgln_if(ROUTING_DEBUG, "Found a matching prefix match. Using longer netmask: {}", route.destination.length());
             }
 
             if (prefix > longest_prefix_match) {
-                dbgln_if(ROUTING_DEBUG, "Found a longer prefix match - route: {}, netmask: {}", route.destination.to_string(), route.netmask);
+                dbgln_if(ROUTING_DEBUG, "Found a longer prefix match - route: {}", route.destination.to_string());
                 longest_prefix_match = prefix;
                 chosen_route = route;
             }
         }
     });
 
-    if (local_adapter && target == local_adapter->ipv4_address())
-        return { local_adapter, local_adapter->mac_address() };
+    if (local_adapter) {
+        for (auto address : local_adapter->ipv4_addresses()) {
+            if (target == address.key)
+                return { local_adapter, local_adapter->mac_address(), address.key };
+        }
+    }
 
     if (!local_adapter && !chosen_route) {
         dbgln_if(ROUTING_DEBUG, "Routing: Couldn't find a suitable adapter for route to {}", target);
-        return { nullptr, {} };
+        return { nullptr, {}, {} };
     }
 
     RefPtr<NetworkAdapter> adapter = nullptr;
-    IPv4Address next_hop_ip;
+    IPv4AddressCidr next_hop_ip = IPv4AddressCidr(IPv4Address(0), 0);
+    IPv4AddressCidr source_address = IPv4AddressCidr(IPv4Address(0), 0);
 
     if (local_adapter) {
-        dbgln_if(ROUTING_DEBUG, "Routing: Got adapter for route (direct): {} ({}/{}) for {}",
+        auto local_subnet = IPv4AddressCidr(0, 0);
+        for (auto address : local_adapter->ipv4_addresses()) {
+            auto address_cidr = IPv4AddressCidr(address.key, address.value);
+            if (address_cidr.contains(target))
+                local_subnet = address_cidr;
+        }
+
+        dbgln_if(ROUTING_DEBUG, "Routing: Got adapter for route (direct): {} ({}) for {}",
             local_adapter->name(),
-            local_adapter->ipv4_address(),
-            local_adapter->ipv4_netmask(),
+            local_subnet,
             target);
 
         adapter = local_adapter;
-        next_hop_ip = target;
+        next_hop_ip = IPv4AddressCidr(target, local_subnet.length());
+        source_address = local_subnet;
     } else if (chosen_route && allow_using_gateway == AllowUsingGateway::Yes) {
-        dbgln_if(ROUTING_DEBUG, "Routing: Got adapter for route (using gateway {}): {} ({}/{}) for {}",
+        auto adapter_subnet = IPv4AddressCidr(0, 0);
+        for (auto address : chosen_route->adapter->ipv4_addresses()) {
+            auto address_cidr = IPv4AddressCidr(address.key, address.value);
+            if (address_cidr.contains(target))
+                adapter_subnet = address_cidr;
+        }
+
+        dbgln_if(ROUTING_DEBUG, "Routing: Got adapter for route (using gateway {}): {} ({}) for {}",
             chosen_route->gateway,
             chosen_route->adapter->name(),
-            chosen_route->adapter->ipv4_address(),
-            chosen_route->adapter->ipv4_netmask(),
+            adapter_subnet,
             target);
         adapter = chosen_route->adapter;
-        next_hop_ip = chosen_route->gateway;
+        next_hop_ip = IPv4AddressCidr(chosen_route->gateway, adapter_subnet.length());
+        source_address = adapter_subnet;
     } else {
-        return { nullptr, {} };
+        return { nullptr, {}, {} };
     }
 
     // If it's a broadcast, we already know everything we need to know.
-    // FIXME: We should also deal with the case where `target_addr` is
-    //        a broadcast to a subnet rather than a full broadcast.
-    if (target_addr == 0xffffffff && matches(adapter)) {
+    if (matches(adapter) && (target == IPv4Address(255, 255, 255, 255) ||  target == next_hop_ip.last_address_of_subnet())) {
         if (allow_broadcast == AllowBroadcast::Yes)
-            return { adapter, { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff } };
-        return { nullptr, {} };
+            return { adapter, { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff }, source_address.ip_address() };
+
+        return { nullptr, {}, {} };
     }
 
     if (adapter == NetworkingManagement::the().loopback_adapter())
-        return { adapter, adapter->mac_address() };
+        return { adapter, adapter->mac_address(), source_address.ip_address() };
 
-    if ((target_addr & (IPv4Address { 240, 0, 0, 0 }.to_u32())) == IPv4Address { 224, 0, 0, 0 }.to_u32())
-        return { adapter, multicast_ethernet_address(target) };
+    if (IPv4AddressCidr(IPv4Address(224, 0, 0, 0), 4).contains(target))
+        return { adapter, multicast_ethernet_address(target), source_address.ip_address() };
 
     {
         auto addr = arp_table().with([&](auto const& table) -> auto {
-            return table.get(next_hop_ip);
+            return table.get(next_hop_ip.ip_address());
         });
         if (addr.has_value()) {
             dbgln_if(ARP_DEBUG, "Routing: Using cached ARP entry for {} ({})", next_hop_ip, addr.value().to_string());
-            return { adapter, addr.value() };
+            return { adapter, addr.value(), source_address.ip_address() };
         }
     }
 
@@ -318,31 +335,31 @@ RoutingDecision route_to(IPv4Address const& target, IPv4Address const& source, R
     ARPPacket request;
     request.set_operation(ARPOperation::Request);
     request.set_target_hardware_address({ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff });
-    request.set_target_protocol_address(next_hop_ip);
+    request.set_target_protocol_address(next_hop_ip.ip_address());
     request.set_sender_hardware_address(adapter->mac_address());
-    request.set_sender_protocol_address(adapter->ipv4_address());
+    request.set_sender_protocol_address(source_address.ip_address());
     adapter->send({ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff }, request);
 
     if (NetworkTask::is_current()) {
         // FIXME: Waiting for the ARP response from inside the NetworkTask would
         // deadlock, so let's hope that whoever called route_to() tries again in a bit.
         dbgln_if(ARP_DEBUG, "Routing: Not waiting for ARP response from inside NetworkTask, sent ARP request using adapter {} for {}", adapter->name(), target);
-        return { nullptr, {} };
+        return { nullptr, {}, {} };
     }
 
     Optional<MACAddress> addr;
-    if (!Thread::current()->block<ARPTableBlocker>({}, next_hop_ip, addr).was_interrupted()) {
+    if (!Thread::current()->block<ARPTableBlocker>({}, next_hop_ip.ip_address(), addr).was_interrupted()) {
         if (addr.has_value()) {
             dbgln_if(ARP_DEBUG, "Routing: Got ARP response using adapter {} for {} ({})",
                 adapter->name(),
                 next_hop_ip,
                 addr.value().to_string());
-            return { adapter, addr.value() };
+            return { adapter, addr.value(), {} };
         }
     }
 
     dbgln_if(ROUTING_DEBUG, "Routing: Couldn't find route using adapter {} for {}", adapter->name(), target);
-    return { nullptr, {} };
+    return { nullptr, {}, {} };
 }
 
 }

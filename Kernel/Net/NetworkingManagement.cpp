@@ -59,13 +59,11 @@ ErrorOr<void> NetworkingManagement::try_for_each(Function<ErrorOr<void>(NetworkA
 
 RefPtr<NetworkAdapter> NetworkingManagement::from_ipv4_address(IPv4Address const& address) const
 {
-    if (address[0] == 0 && address[1] == 0 && address[2] == 0 && address[3] == 0)
-        return m_loopback_adapter;
-    if (address[0] == 127)
+    if (address == IPv4Address(0, 0, 0, 0) || address[0] ==  127)
         return m_loopback_adapter;
     return m_adapters.with([&](auto& adapters) -> RefPtr<NetworkAdapter> {
         for (auto& adapter : adapters) {
-            if (adapter->ipv4_address() == address || adapter->ipv4_broadcast() == address)
+            if (adapter->ipv4_addresses().get(address).has_value())
                 return adapter;
         }
         return nullptr;
@@ -78,7 +76,7 @@ RefPtr<NetworkAdapter> NetworkingManagement::from_ipv6_address(IPv6Address const
         return m_loopback_adapter;
     return m_adapters.with([&](auto& adapters) -> RefPtr<NetworkAdapter> {
         for (auto& adapter : adapters) {
-            if (adapter->ipv6_address() == address || adapter->ipv6_multicast() == address)
+            if (adapter->ipv6_addresses().get(address).has_value())
                 return adapter;
         }
         return nullptr;

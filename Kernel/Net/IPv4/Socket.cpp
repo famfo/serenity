@@ -213,6 +213,8 @@ ErrorOr<size_t> IPv4Socket::sendto(OpenFileDescription&, UserOrKernelBuffer cons
     if (!is_connected() && m_peer_address.is_zero())
         return set_so_error(EPIPE);
 
+    dbgln("Meow1: {}", m_peer_address);
+
     auto allow_broadcast = m_broadcast_allowed ? AllowBroadcast::Yes : AllowBroadcast::No;
     auto allow_using_gateway = ((flags & MSG_DONTROUTE) || m_routing_disabled) ? AllowUsingGateway::No : AllowUsingGateway::Yes;
     auto adapter = bound_interface().with([](auto& bound_device) -> RefPtr<NetworkAdapter> { return bound_device; });
@@ -220,8 +222,10 @@ ErrorOr<size_t> IPv4Socket::sendto(OpenFileDescription&, UserOrKernelBuffer cons
     if (routing_decision.is_zero())
         return set_so_error(EHOSTUNREACH);
 
+    dbgln("Meow2: {}", m_peer_address);
+
     if (m_local_address.to_u32() == 0)
-        m_local_address = routing_decision.adapter->ipv4_address();
+        m_local_address = routing_decision.source_address;
 
     TRY(ensure_bound());
 
@@ -644,7 +648,9 @@ ErrorOr<void> IPv4Socket::ioctl(OpenFileDescription&, unsigned request, Userspac
             auto gateway = IPv4Address(((sockaddr_in&)route.rt_gateway).sin_addr.s_addr);
             auto genmask = IPv4Address(((sockaddr_in&)route.rt_genmask).sin_addr.s_addr);
 
-            return update_routing_table(destination, gateway, genmask, route.rt_flags, adapter, UpdateTable::Set);
+            auto destination_cidr = IPv4AddressCidr(destination, popcount(genmask.to_u32()));
+
+            return update_routing_table(destination_cidr, gateway, route.rt_flags, adapter, UpdateTable::Set);
         }
         case SIOCDELRT:
             auto current_process_credentials = Process::current().credentials();
@@ -657,7 +663,9 @@ ErrorOr<void> IPv4Socket::ioctl(OpenFileDescription&, unsigned request, Userspac
             auto gateway = IPv4Address(((sockaddr_in&)route.rt_gateway).sin_addr.s_addr);
             auto genmask = IPv4Address(((sockaddr_in&)route.rt_genmask).sin_addr.s_addr);
 
-            return update_routing_table(destination, gateway, genmask, route.rt_flags, adapter, UpdateTable::Delete);
+            auto destination_cidr = IPv4AddressCidr(destination, popcount(genmask.to_u32()));
+
+            return update_routing_table(destination_cidr, gateway, route.rt_flags, adapter, UpdateTable::Delete);
         }
 
         return EINVAL;
@@ -756,37 +764,49 @@ ErrorOr<void> IPv4Socket::ioctl(OpenFileDescription&, unsigned request, Userspac
             if (!current_process_credentials->is_superuser())
                 return EPERM;
             if (ifr.ifr_addr.sa_family == AF_INET) {
-                adapter->set_ipv4_address(IPv4Address(bit_cast<sockaddr_in*>(&ifr.ifr_addr)->sin_addr.s_addr));
+                adapter->add_ipv4_address(IPv4Address(bit_cast<sockaddr_in*>(&ifr.ifr_addr)->sin_addr.s_addr), 24);
                 return {};
             } else if (ifr.ifr_addr.sa_family == AF_INET6) {
-                adapter->set_ipv6_address(IPv6Address(bit_cast<sockaddr_in6*>(&ifr.ifr_addr)->sin6_addr.s6_addr));
+                adapter->add_ipv6_address(IPv6Address(bit_cast<sockaddr_in6*>(&ifr.ifr_addr)->sin6_addr.s6_addr), 64);
                 return {};
             } else {
                 return EAFNOSUPPORT;
             }
 
-        case SIOCSIFNETMASK:
+        case SIOCSIFNETMASK: {
             if (!current_process_credentials->is_superuser())
                 return EPERM;
             if (ifr.ifr_addr.sa_family != AF_INET)
                 return EAFNOSUPPORT;
-            adapter->set_ipv4_netmask(IPv4Address(bit_cast<sockaddr_in*>(&ifr.ifr_netmask)->sin_addr.s_addr));
+            auto adapter_address = adapter->ipv4_addresses().get(IPv4Address(bit_cast<sockaddr_in*>(&ifr.ifr_addr)->sin_addr.s_addr));
+            if (adapter_address.has_value())
+                adapter_address.value() = popcount(bit_cast<sockaddr_in*>(&ifr.ifr_netmask)->sin_addr.s_addr);
             return {};
+        }
 
+        // FIXME: this only returns the first address
         case SIOCGIFADDR: {
-            auto ip4_addr = adapter->ipv4_address().to_u32();
+            if (adapter->ipv4_addresses().is_empty())
+                return EINVAL;
+            auto ip4_addr = adapter->ipv4_addresses().begin()->key;
             auto& socket_address_in = reinterpret_cast<sockaddr_in&>(ifr.ifr_addr);
             socket_address_in.sin_family = AF_INET;
-            socket_address_in.sin_addr.s_addr = ip4_addr;
+            socket_address_in.sin_addr.s_addr = ip4_addr.to_u32();
             return copy_to_user(user_ifr, &ifr);
         }
 
+        // FIXME: this only returns the netmask of the first address
         case SIOCGIFNETMASK: {
-            auto ip4_netmask = adapter->ipv4_netmask().to_u32();
+            if (adapter->ipv4_addresses().is_empty())
+                return EINVAL;
+            auto ip4_addr = adapter->ipv4_addresses().begin();
+            auto ip4_addr_cidr = IPv4AddressCidr(ip4_addr->key, ip4_addr->value);
+            auto ip4_netmask = ip4_addr_cidr.netmask();
+
             auto& socket_address_in = reinterpret_cast<sockaddr_in&>(ifr.ifr_addr);
             socket_address_in.sin_family = AF_INET;
             // NOTE: NOT ifr_netmask.
-            socket_address_in.sin_addr.s_addr = ip4_netmask;
+            socket_address_in.sin_addr.s_addr = ip4_netmask.to_u32();
 
             return copy_to_user(user_ifr, &ifr);
         }
@@ -808,13 +828,14 @@ ErrorOr<void> IPv4Socket::ioctl(OpenFileDescription&, unsigned request, Userspac
         }
 
         case SIOCGIFBRDADDR: {
-            // Broadcast address is basically the reverse of the netmask, i.e.
-            // instead of zeroing out the end, you OR with 1 instead.
-            auto ip4_netmask = adapter->ipv4_netmask().to_u32();
-            auto broadcast_addr = adapter->ipv4_address().to_u32() | ~ip4_netmask;
+            if (adapter->ipv4_addresses().is_empty())
+                return EINVAL;
+            auto ip4_addr = adapter->ipv4_addresses().begin();
+            auto ip4_addr_cidr = IPv4AddressCidr(ip4_addr->key, ip4_addr->value);
+            auto broadcast_addr = ip4_addr_cidr.last_address_of_subnet();
             auto& socket_address_in = reinterpret_cast<sockaddr_in&>(ifr.ifr_addr);
             socket_address_in.sin_family = AF_INET;
-            socket_address_in.sin_addr.s_addr = broadcast_addr;
+            socket_address_in.sin_addr.s_addr = broadcast_addr.to_u32();
             return copy_to_user(user_ifr, &ifr);
         }
 

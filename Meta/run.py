@@ -858,14 +858,10 @@ class TapController:
         self.should_enable_tap = machine_type == MachineType.QEMUTap
 
     def __enter__(self) -> None:
-        if self.should_enable_tap:
-            run(["sudo", "ip", "tuntap", "del", "dev", "tap0", "mode", "tap"])
-            user = os.getuid()
-            run(["sudo", "ip", "tuntap", "add", "dev", "tap0", "mode", "tap", "user", str(user)])
+        print("meow")
 
     def __exit__(self, exc_type: type | None, exc_value: Any | None, traceback: Any | None) -> Literal[False]:
-        if self.should_enable_tap:
-            run(["sudo", "ip", "tuntap", "del", "dev", "tap0", "mode", "tap"])
+        print("woem")
         # Re-raise exceptions in any case.
         return False
 

@@ -1,5 +1,18 @@
 { pkgs ? import <nixpkgs> { } }: with pkgs;
 
+let
+    libs = [
+        (lib.getLib gcc13Stdenv.cc.cc)
+        libmpc
+        mpfr
+        gmp
+        zlib
+        zstd
+        ncurses
+        libxcrypt
+        openssl
+    ];
+in
 mkShell.override { stdenv = gcc13Stdenv; } {
   packages = [
     ccache
@@ -8,11 +21,10 @@ mkShell.override { stdenv = gcc13Stdenv; } {
     e2fsprogs
     fuse2fs
     gcc13
-    gmp
+    mold-wrapped
+    lld
     # To create port launcher icons
     imagemagick
-    libmpc
-    mpfr
     ninja
     patch
     pkg-config
@@ -21,11 +33,10 @@ mkShell.override { stdenv = gcc13Stdenv; } {
     unzip
     # To build the GRUB disk image
     grub2
-    libxcrypt
-    openssl
     parted
     qemu
     python3
-  ];
+  ] ++ libs;
+  LD_LIBRARY_PATH = lib.makeLibraryPath libs;
   hardeningDisable = [ "format" ];
 }

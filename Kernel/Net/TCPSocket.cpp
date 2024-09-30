@@ -583,7 +583,7 @@ ErrorOr<void> TCPSocket::protocol_connect(OpenFileDescription& description)
     if (routing_decision.is_zero())
         return set_so_error(EHOSTUNREACH);
     if (!has_specific_local_address())
-        set_local_address(routing_decision.adapter->ipv4_address());
+        set_local_address(routing_decision.source_address);
 
     TRY(ensure_bound());
     if (m_registered_socket_tuple.has_value() && m_registered_socket_tuple != tuple()) {

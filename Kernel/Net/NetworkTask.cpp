@@ -61,8 +61,7 @@ void NetworkTask_main(void*)
         dmesgln("NetworkTask: {} network adapter found: hw={}", adapter.class_name(), adapter.mac_address().to_string());
 
         if (adapter.class_name() == "LoopbackAdapter"sv) {
-            adapter.set_ipv4_address({ 127, 0, 0, 1 });
-            adapter.set_ipv4_netmask({ 255, 0, 0, 0 });
+            adapter.add_ipv4_address(IPv4Address(127, 0, 0, 1), 8);
         }
 
         adapter.on_receive = [&]() {
@@ -162,13 +161,13 @@ void handle_arp(EthernetFrameHeader const& eth, size_t frame_size)
         // Who has this IP address?
         if (auto adapter = NetworkingManagement::the().from_ipv4_address(packet.target_protocol_address())) {
             // We do!
-            dbgln("handle_arp: Responding to ARP request for my IPv4 address ({})", adapter->ipv4_address());
+            dbgln("handle_arp: Responding to ARP request for my IPv4 address ({})", packet.target_protocol_address());
             ARPPacket response;
             response.set_operation(ARPOperation::Response);
             response.set_target_hardware_address(packet.sender_hardware_address());
             response.set_target_protocol_address(packet.sender_protocol_address());
             response.set_sender_hardware_address(adapter->mac_address());
-            response.set_sender_protocol_address(adapter->ipv4_address());
+            response.set_sender_protocol_address(packet.target_protocol_address());
 
             adapter->send(packet.sender_hardware_address(), response);
         }
@@ -199,13 +198,16 @@ void handle_ipv4(EthernetFrameHeader const& eth, size_t frame_size, UnixDateTime
     dbgln_if(IPV4_DEBUG, "handle_ipv4: source={}, destination={}", packet.source(), packet.destination());
 
     NetworkingManagement::the().for_each([&](auto& adapter) {
-        if (adapter.ipv4_address().is_zero() || !adapter.link_up())
+        if (adapter.ipv4_addresses().is_empty() || !adapter.link_up())
             return;
 
-        auto my_net = adapter.ipv4_address().to_u32() & adapter.ipv4_netmask().to_u32();
-        auto their_net = packet.source().to_u32() & adapter.ipv4_netmask().to_u32();
-        if (my_net == their_net)
-            update_arp_table(packet.source(), eth.source(), UpdateTable::Set);
+        for(auto address : adapter.ipv4_addresses()) {
+            auto my_net = IPv4AddressCidr(address.key, address.value);
+            if (my_net.contains(packet.source())) {
+                update_arp_table(packet.source(), eth.source(), UpdateTable::Set);
+                break;
+            }
+        }
     });
 
     switch ((IPv4Protocol)packet.protocol()) {
@@ -256,7 +258,7 @@ void handle_icmp(EthernetFrameHeader const& eth, IPv4Packet const& ipv4_packet, 
             dbgln("Could not allocate packet buffer while sending ICMP packet");
             return;
         }
-        adapter->fill_in_ipv4_header(*packet, adapter->ipv4_address(), eth.source(), ipv4_packet.source(), IPv4Protocol::ICMP, icmp_packet_size, 0, 64);
+        adapter->fill_in_ipv4_header(*packet, ipv4_packet.destination(), eth.source(), ipv4_packet.source(), IPv4Protocol::ICMP, icmp_packet_size, 0, 64);
         memset(packet->buffer->data() + ipv4_payload_offset, 0, sizeof(ICMPEchoPacket));
         auto& response = *(ICMPEchoPacket*)(packet->buffer->data() + ipv4_payload_offset);
         response.header.set_type(ICMPv4Type::EchoReply);

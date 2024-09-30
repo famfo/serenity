@@ -8,6 +8,7 @@
 #include <Kernel/FileSystem/SysFS/Subsystems/Kernel/Network/Adapters.h>
 #include <Kernel/Net/NetworkingManagement.h>
 #include <Kernel/Sections.h>
+#include <AK/IpAddressCidr.h>
 
 namespace Kernel {
 
@@ -30,18 +31,33 @@ ErrorOr<void> SysFSNetworkAdaptersStats::try_generate(KBufferBuilder& builder)
         TRY(obj.add("class_name"sv, adapter.class_name()));
         auto mac_address = TRY(adapter.mac_address().to_string());
         TRY(obj.add("mac_address"sv, mac_address->view()));
-        if (!adapter.ipv4_address().is_zero()) {
-            auto ipv4_address = TRY(adapter.ipv4_address().to_string());
-            TRY(obj.add("ipv4_address"sv, ipv4_address->view()));
-            auto ipv4_netmask = TRY(adapter.ipv4_netmask().to_string());
-            TRY(obj.add("ipv4_netmask"sv, ipv4_netmask->view()));
+
+        auto ipv4_addresses = adapter.ipv4_addresses();
+        if (!ipv4_addresses.is_empty()) {
+            auto ipv4_addresses_obj = TRY(obj.add_array("ipv4_addresses"sv));
+
+            for (auto ipv4_address : ipv4_addresses) {
+                auto ipv4_address_cidr = IPv4AddressCidr(ipv4_address.key, ipv4_address.value);
+                auto ipv4_address_string = TRY(ipv4_address_cidr.to_string());
+                TRY(ipv4_addresses_obj.add(ipv4_address_string->view()));
+            }
+
+            TRY(ipv4_addresses_obj.finish());
         }
-        if (!adapter.ipv6_address().is_zero()) {
-            auto ipv6_address = TRY(adapter.ipv6_address().to_string());
-            TRY(obj.add("ipv6_address"sv, ipv6_address->view()));
-            auto ipv6_netmask = TRY(adapter.ipv6_netmask().to_string());
-            TRY(obj.add("ipv6_netmask"sv, ipv6_netmask->view()));
+
+        auto ipv6_addresses = adapter.ipv6_addresses();
+        if (!ipv6_addresses.is_empty()) {
+            auto ipv6_addresses_obj = TRY(obj.add_array("ipv6_addresses"sv));
+
+            for (auto ipv6_address : ipv6_addresses) {
+                auto ipv6_address_cidr = IPv6AddressCidr(ipv6_address.key, ipv6_address.value);
+                auto ipv6_address_string = TRY(ipv6_address_cidr.to_string());
+                TRY(ipv6_addresses_obj.add(ipv6_address_string->view()));
+            }
+
+            TRY(ipv6_addresses_obj.finish());
         }
+
         TRY(obj.add("packets_in"sv, adapter.packets_in()));
         TRY(obj.add("bytes_in"sv, adapter.bytes_in()));
         TRY(obj.add("packets_out"sv, adapter.packets_out()));

@@ -31,8 +31,6 @@ ErrorOr<void> SysFSNetworkRouteStats::try_generate(KBufferBuilder& builder)
             TRY(obj.add("destination"sv, destination->view()));
             auto gateway = TRY(it.gateway.to_string());
             TRY(obj.add("gateway"sv, gateway->view()));
-            auto netmask = TRY(it.netmask.to_string());
-            TRY(obj.add("genmask"sv, netmask->view()));
             TRY(obj.add("flags"sv, it.flags));
             TRY(obj.add("interface"sv, it.adapter->name()));
             TRY(obj.finish());
