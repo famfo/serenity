@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include "AK/IpAddressCidr.h"
 #include <AK/HashMap.h>
+#include <AK/IpAddressCidr.h>
 #include <AK/Singleton.h>
 #include <Kernel/Debug.h>
 #include <Kernel/Locking/MutexProtected.h>
@@ -181,6 +181,8 @@ static MACAddress multicast_ethernet_address(IPv4Address const& address)
 
 RoutingDecision route_to(IPv4Address const& target, IPv4Address const& source, RefPtr<NetworkAdapter> const through, AllowBroadcast allow_broadcast, AllowUsingGateway allow_using_gateway)
 {
+    dbgln("routing meow: {} {}", target, source);
+
     auto matches = [&](auto& adapter) {
         if (!through)
             return true;
@@ -204,7 +206,7 @@ RoutingDecision route_to(IPv4Address const& target, IPv4Address const& source, R
         auto local_addresses = adapter.ipv4_addresses();
         for (auto entry : local_addresses) {
             auto address = IPv4AddressCidr(entry.key, entry.value);
-            dbgln("route_to: trying {} {} for target {}", local_adapter->name(), address, target);
+            dbgln("route_to: trying {} {} for target {}", adapter.name(), address, target);
 
             if (source == address.ip_address()) {
                 local_adapter = NetworkingManagement::the().loopback_adapter();
@@ -219,10 +221,13 @@ RoutingDecision route_to(IPv4Address const& target, IPv4Address const& source, R
 
             if (address.contains(target) && matches(adapter)) {
                 local_adapter = adapter;
+                dbgln("route_to: fonud local adapter: {}", local_adapter->name());
                 return;
             }
         }
     });
+
+    dbgln("meow1");
 
     u32 longest_prefix_match = 0;
     routing_table().for_each([&target, &matches, &longest_prefix_match, &chosen_route](auto& route) {
@@ -254,6 +259,8 @@ RoutingDecision route_to(IPv4Address const& target, IPv4Address const& source, R
         }
     });
 
+    dbgln("meow2");
+
     if (local_adapter) {
         for (auto address : local_adapter->ipv4_addresses()) {
             if (target == address.key)
@@ -261,21 +268,31 @@ RoutingDecision route_to(IPv4Address const& target, IPv4Address const& source, R
         }
     }
 
+    dbgln("meow3");
+
     if (!local_adapter && !chosen_route) {
         dbgln_if(ROUTING_DEBUG, "Routing: Couldn't find a suitable adapter for route to {}", target);
         return { nullptr, {}, {} };
     }
 
+    dbgln("meow4");
+
     RefPtr<NetworkAdapter> adapter = nullptr;
-    IPv4AddressCidr next_hop_ip = IPv4AddressCidr(IPv4Address(0), 0);
-    IPv4AddressCidr source_address = IPv4AddressCidr(IPv4Address(0), 0);
+    IPv4AddressCidr next_hop_ip = IPv4AddressCidr(IPv4Address(0, 0, 0, 0), 0);
+    IPv4AddressCidr source_address = IPv4AddressCidr(IPv4Address(0, 0, 0, 0), 0);
+
+    dbgln("meow4.5");
 
     if (local_adapter) {
-        auto local_subnet = IPv4AddressCidr(0, 0);
+        dbgln("inner meow1");
+        auto local_subnet = IPv4AddressCidr(IPv4Address(0, 0, 0, 0), 0);
         for (auto address : local_adapter->ipv4_addresses()) {
             auto address_cidr = IPv4AddressCidr(address.key, address.value);
-            if (address_cidr.contains(target))
+            dbgln("inner inner meow1: {}", address_cidr);
+            if (address_cidr.contains(target)) {
                 local_subnet = address_cidr;
+                break;
+            }
         }
 
         dbgln_if(ROUTING_DEBUG, "Routing: Got adapter for route (direct): {} ({}) for {}",
@@ -287,9 +304,11 @@ RoutingDecision route_to(IPv4Address const& target, IPv4Address const& source, R
         next_hop_ip = IPv4AddressCidr(target, local_subnet.length());
         source_address = local_subnet;
     } else if (chosen_route && allow_using_gateway == AllowUsingGateway::Yes) {
+        dbgln("inner meow2");
         auto adapter_subnet = IPv4AddressCidr(0, 0);
         for (auto address : chosen_route->adapter->ipv4_addresses()) {
             auto address_cidr = IPv4AddressCidr(address.key, address.value);
+            dbgln("inner inner meow2: {}", address_cidr);
             if (address_cidr.contains(target))
                 adapter_subnet = address_cidr;
         }
@@ -303,22 +322,31 @@ RoutingDecision route_to(IPv4Address const& target, IPv4Address const& source, R
         next_hop_ip = IPv4AddressCidr(chosen_route->gateway, adapter_subnet.length());
         source_address = adapter_subnet;
     } else {
+        dbgln("inner meow3 (how?)");
         return { nullptr, {}, {} };
     }
 
+    dbgln("meow5");
+
     // If it's a broadcast, we already know everything we need to know.
-    if (matches(adapter) && (target == IPv4Address(255, 255, 255, 255) ||  target == next_hop_ip.last_address_of_subnet())) {
+    if (matches(adapter) && (target == IPv4Address(255, 255, 255, 255) || target == next_hop_ip.last_address_of_subnet())) {
         if (allow_broadcast == AllowBroadcast::Yes)
             return { adapter, { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff }, source_address.ip_address() };
 
         return { nullptr, {}, {} };
     }
 
+    dbgln("meow6");
+
     if (adapter == NetworkingManagement::the().loopback_adapter())
         return { adapter, adapter->mac_address(), source_address.ip_address() };
 
+    dbgln("meow7");
+
     if (IPv4AddressCidr(IPv4Address(224, 0, 0, 0), 4).contains(target))
         return { adapter, multicast_ethernet_address(target), source_address.ip_address() };
+
+    dbgln("meow8");
 
     {
         auto addr = arp_table().with([&](auto const& table) -> auto {

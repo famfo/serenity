@@ -218,11 +218,17 @@ ErrorOr<size_t> IPv4Socket::sendto(OpenFileDescription&, UserOrKernelBuffer cons
     auto allow_broadcast = m_broadcast_allowed ? AllowBroadcast::Yes : AllowBroadcast::No;
     auto allow_using_gateway = ((flags & MSG_DONTROUTE) || m_routing_disabled) ? AllowUsingGateway::No : AllowUsingGateway::Yes;
     auto adapter = bound_interface().with([](auto& bound_device) -> RefPtr<NetworkAdapter> { return bound_device; });
+
+    dbgln("Meow2: {}", m_peer_address);
+
     auto routing_decision = route_to(m_peer_address, m_local_address, adapter, allow_broadcast, allow_using_gateway);
+
+    dbgln("Meow3: {}", m_peer_address);
+
     if (routing_decision.is_zero())
         return set_so_error(EHOSTUNREACH);
 
-    dbgln("Meow2: {}", m_peer_address);
+    dbgln("Meow4: {}", m_peer_address);
 
     if (m_local_address.to_u32() == 0)
         m_local_address = routing_decision.source_address;
